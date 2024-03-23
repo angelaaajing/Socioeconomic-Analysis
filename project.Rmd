@@ -1,0 +1,847 @@
+---
+title: "STA302 Project"
+author: "Carter Ponce, Dian Rong, Jing Yu, Krishna Kumar "
+date: "10/8/2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# load library
+library(tidyverse)
+# install.packages("haven")
+# install.packages("psych")
+library(haven)
+library(psych)
+library(dplyr)
+library(car) # for boxCox
+library(MASS) # for AIC
+# install.packages("leaps")
+library(leaps) # for all possible subsets
+```
+
+# Data Cleaning
+
+Transform original xpt to csv files, and combine them by the same SEQN.
+Extract the original dataset in a csv file.
+
+```{r}
+# demographics
+xpt_data <- read_xpt("DEMO_J.XPT")
+demo <- as.data.frame(xpt_data)
+
+# body measures
+xpt_data <- read_xpt("BMX_J.XPT")
+body <- as.data.frame(xpt_data)
+
+# health status
+xpt_data <- read_xpt("HSQ_J.XPT")
+health <- as.data.frame(xpt_data)
+
+# Sleep status
+xpt_data <- read_xpt("SLQ_J.XPT")
+sleep <- as.data.frame(xpt_data)
+
+# physical activities
+xpt_data <- read_xpt("PAQ_J.XPT")
+phyactive <- as.data.frame(xpt_data)
+
+# Computer hours
+xpt_data <- read_xpt("PAQY_J.XPT")
+compactive <- as.data.frame(xpt_data)
+
+# Alcohol
+xpt_data <- read_xpt("ALQ_J.XPT")
+alcohol <- as.data.frame(xpt_data)
+
+# Smoke
+xpt_data <- read_xpt("SMQ_J.XPT")
+smoke <- as.data.frame(xpt_data)
+
+# Drug
+xpt_data <- read_xpt("DUQ_J.XPT")
+drug <- as.data.frame(xpt_data)
+
+# Merge the data frames using dplyr's left_join function
+combined_data <- demo %>%
+  left_join(body, by = "SEQN") %>%
+  left_join(health, by = "SEQN") %>%
+  left_join(sleep, by = "SEQN") %>%
+  left_join(phyactive, by = "SEQN") %>%
+  left_join(compactive, by = "SEQN") %>%
+  left_join(alcohol, by = "SEQN") %>%
+  left_join(smoke, by = "SEQN") %>%
+  left_join(drug, by = "SEQN")
+
+# Save the combined data to a CSV file
+write.csv(combined_data, "original_data.csv", row.names = FALSE)
+```
+
+Clean the dataset.
+
+```{r}
+# Read original data
+data <- read.csv("original_data.csv")
+
+new_data <- data %>%
+  # convert some numerical variables to categorical variables
+  mutate(
+    # HHIncome (Response variable)
+    HHIncome = case_when(
+      INDHHIN2 == "1" ~ "0 - 4999",
+      INDHHIN2 == "2" ~ "5000 - 9999",
+      INDHHIN2 == "3" ~ "10000 - 14999",
+      INDHHIN2 == "4" ~ "15000 - 19999",
+      INDHHIN2 == "5" ~ "20000 - 24999",
+      INDHHIN2 == "6" ~ "25000 - 34999",
+      INDHHIN2 == "7" ~ "35000 - 44999",
+      INDHHIN2 == "8" ~ "45000 - 54999",
+      INDHHIN2 == "9" ~ "55000 - 64999",
+      INDHHIN2 == "10" ~ "65000 - 74999",
+      INDHHIN2 == "14" ~ "75000 - 99999",
+      INDHHIN2 == "15" ~ "100000 or More",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+    ),
+    # Predict variable
+    MaritalStatus = case_when(
+      DMDMARTL == "1" ~ "Married",
+      DMDMARTL == "2" ~ "Widowed",
+      DMDMARTL == "3" ~ "Divorced",
+      DMDMARTL == "4" ~ "Separated",
+      DMDMARTL == "5" ~ "NeverMarried",
+      DMDMARTL == "6" ~ "LivePartner",
+      TRUE ~ NA_character_       # For all other cases, assign NA
+    ),
+    HealthGen = case_when(
+      HSD010 == "1" ~ "Excellent",
+      HSD010 == "2" ~ "Vgood",
+      HSD010 == "3" ~ "Good",
+      HSD010 == "4" ~ "Fair",
+      HSD010 == "5" ~ "Poor",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      ),
+    SleepTrouble = case_when(
+      SLQ050 == "1" ~ "Yes",
+      SLQ050 == "2" ~ "No",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      ),
+    PhysActive = case_when(
+      # If the person did at least one activity, assign Yes
+      any(c(PAQ605, PAQ620, PAQ635, PAQ650, PAQ665) == 1, na.rm = TRUE) ~ "Yes",  
+      # If the person did not do any of activities, assign No
+      all(c(PAQ605, PAQ620, PAQ635, PAQ650, PAQ665) == 2, na.rm = TRUE) ~ "No",   
+      TRUE ~ NA_character_        # Otherwise, assign NA
+    ),
+    CompHrsDay = case_when(
+      PAQ715 == "0" ~ "0_to_1hr",
+      PAQ715 == "1" ~ "1_hr",
+      PAQ715 == "2" ~ "2_hr",
+      PAQ715 == "3" ~ "3_hr",
+      PAQ715 == "4" ~ "4_hr",
+      PAQ715 == "5" ~ "More_4_hr",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      ),
+    AlcoholDay = ifelse(ALQ130 > 15, 0, ALQ130),
+    SmokeNow = case_when(
+      SMQ020 == "1" ~ "Yes",
+      SMQ020 == "2" ~ "No",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      ),
+    RegularMarij = case_when(
+      DUQ200 == "1" ~ "Yes",
+      DUQ200 == "2" ~ "No",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      ),
+    HardDrugs = case_when(
+      DUQ240 == "1" ~ "Yes",
+      DUQ240 == "2" ~ "No",
+      TRUE ~ NA_character_     # For all other cases, assign NA
+      )
+  ) %>%
+  # rename some variable names to make them readable
+  rename(BMI = BMXBMI,
+         SleepHrsNight = SLD012, IncomeRatio = INDFMPIR) %>%
+  # select variables we may use in our research
+  select(SEQN, IncomeRatio, MaritalStatus, BMI, HealthGen, 
+         SleepHrsNight, SleepTrouble, PhysActive, CompHrsDay,
+         AlcoholDay, SmokeNow, RegularMarij, HardDrugs, RIDAGEYR) %>%
+  # drop NA in all variables to allow analysis
+  filter(! is.na(IncomeRatio)) %>% filter(! is.na(MaritalStatus)) %>% filter(! is.na(SmokeNow)) %>%
+  filter(! is.na(BMI)) %>% filter(! is.na(SleepHrsNight)) %>% filter(! is.na(AlcoholDay)) %>%
+  # only keep those at least 30 years old
+  filter(RIDAGEYR >= 30) %>%
+  # select the 5 variables of interest
+  select(SEQN, IncomeRatio, MaritalStatus, BMI, SleepHrsNight,
+         AlcoholDay, SmokeNow)
+
+# Save the cleaned data to a CSV file
+write.csv(new_data, "new_data.csv", row.names = FALSE)
+```
+
+Summary table
+
+```{r}
+# convert character factors to categorical
+new_data$MaritalStatus <- as.factor(new_data$MaritalStatus)
+new_data$SmokeNow <- as.factor(new_data$SmokeNow)
+
+# summary of categorical variables
+categorical_summary <- new_data %>%
+  select(MaritalStatus, SmokeNow)
+summary(categorical_summary)
+```
+
+```{r}
+# summary of numerical variables
+numerical_summary <- new_data %>%
+  select(BMI, SleepHrsNight, AlcoholDay) %>%
+  summarise(
+    Variable = c("BMI", "SleepHrsNight", "AlcoholDay"),
+    Mean = sapply(., function(x) if(is.numeric(x)) mean(x, na.rm = TRUE) else NA),
+    Median = sapply(., function(x) if(is.numeric(x)) median(x, na.rm = TRUE) else NA),
+    SD = sapply(., function(x) if(is.numeric(x)) sd(x, na.rm = TRUE) else NA),
+    Min = sapply(., function(x) if(is.numeric(x)) min(x, na.rm = TRUE) else NA),
+    Max = sapply(., function(x) if(is.numeric(x)) max(x, na.rm = TRUE) else NA),
+    IQR = sapply(., function(x) if(is.numeric(x)) IQR(x, na.rm = TRUE) else NA),
+    Skewness = sapply(., function(x) if(is.numeric(x)) psych::skew(x, na.rm = TRUE) else NA),
+    Outliers = sapply(., function(x) if(is.numeric(x)) {
+      q1 <- quantile(x, 0.25, na.rm = TRUE)
+      q3 <- quantile(x, 0.75, na.rm = TRUE)
+      iqr <- IQR(x, na.rm = TRUE)
+      sum(x < q1 - 1.5 * iqr | x > q3 + 1.5 * iqr, na.rm = TRUE)
+    } else NA),
+    Missing_Values = sapply(., function(x) sum(is.na(x)))
+  )
+
+print(numerical_summary)
+```
+
+# Preliminary Model
+
+```{r, preliminary model}
+new_data <- read.csv("new_data.csv")
+
+model <- lm(IncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data)
+
+y_hat <- fitted(model)
+e_hat <- resid(model)
+```
+
+## Assessment of Assumptions on Preliminary Model
+
+### Conditions for MLR
+
+#### Conditional Mean Response
+
+```{r}
+plot(x=y_hat, y=new_data$IncomeRatio, main="IncomeRatio vs Fitted (Prelim Model)", ylab="IncomeRatio", xlab="Fitted")
+```
+#### Conditional Mean Predictors
+
+```{r}
+# for continuous predictors
+pairs(new_data[,4:6])
+```
+### Assumptions for LR
+
+#### Residuals vs Fitted Plot
+
+```{r}
+plot(x =y_hat, y = e_hat, main="Residual vs Fitted (Prelim Model)", xlab="Fitted",
+ylab="Residuals")
+```
+#### Residuals vs Predictor plots (numerical)
+```{r}
+plot(x=new_data$BMI, y=e_hat, main="Residual vs Predictor (BMI,  Prelim Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat, main="Residual vs Predictor (Sleep,  Prelim Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat, main="Residual vs Predictor (Alcohol,  Prelim Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+#### Residuals vs Predictor plots (categorical)
+```{r}
+boxplot(e_hat ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status,  Prelim Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking,  Prelim Model)", xlab="Currently Smoke", ylab="Residuals")
+
+```
+#### QQ plot
+```{r}
+qqnorm(e_hat)
+qqline(e_hat)
+```
+
+# Create New Model Using Transformed Y
+
+## Address Normality Violation on Preliminary Model
+```{r}
+c <- boxCox(model, family="yjPower", grid=TRUE)
+abline(v = 0.5, col = "red", lty = 1)
+```
+
+## New Model
+```{r, transformed model}
+new_data$TransformedIncomeRatio <- (new_data$IncomeRatio) ^ (1/2)
+
+model2 <- lm(TransformedIncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data)
+
+y_hat2 <- fitted(model2)
+e_hat2 <- resid(model2)
+
+summary(model2)
+```
+
+## Assessment of Assumptions on Transformed Model
+
+### Conditions for MLR
+
+#### Conditional Mean Response
+
+```{r, Conditional Mean Response}
+plot(x=y_hat, y=new_data$Transformed, main="TransformedIncomeRatio vs Fitted (Transformed Model)", ylab="TransformedIncomeRatio", xlab="Fitted")
+```
+
+#### Conditional Mean Predictors
+(same as before)
+```{r}
+# for continuous predictors
+pairs(new_data[,4:6])
+```
+### Assumptions for LR
+
+#### Residuals vs Fitted Plot
+
+```{r}
+plot(x =y_hat2, y = e_hat2, main="Residual vs Fitted (Transformed Model)", xlab="Fitted",
+ylab="Residuals")
+```
+#### Residuals vs Predictor plots (numerical)
+```{r}
+plot(x=new_data$BMI, y=e_hat2, main="Residual vs Predictor (BMI, Transformed Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat2, main="Residual vs Predictor (Sleep, Transformed Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat2, main="Residual vs Predictor (Alcohol, Transformed Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+#### Residuals vs Predictor plots (categorical)
+```{r}
+boxplot(e_hat2 ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status, Transformed Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat2 ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking, Transformed Model)", xlab="Currently Smoke", ylab="Residuals")
+
+```
+#### QQ plot
+```{r}
+qqnorm(e_hat2)
+qqline(e_hat2)
+```
+
+# Find Best Model Through AIC and BIC
+
+## Forwards
+
+```{r}
+# AIC
+stepAIC(lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8]), scope=list(upper=lm(TransformedIncomeRatio ~ ., data=new_data[,3:8])), direction = "forward", k=2)
+# same model as model 2
+
+# BIC
+stepAIC(lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8]), scope=list(upper=lm(TransformedIncomeRatio ~ ., data=new_data[,3:8])), direction = "forward", k=log(n))
+# New model !
+```
+
+### Forward Model
+```{r}
+model3 <- lm(TransformedIncomeRatio ~ MaritalStatus + SmokeNow + AlcoholDay + SleepHrsNight, data=new_data)
+
+y_hat3 <- fitted(model3)
+e_hat3 <- resid(model3)
+```
+
+#### Assessment of Assumptions on Forwards Model
+
+##### Conditions for MLR
+
+####### Conditional Mean Response
+
+```{r, Conditional Mean Response}
+plot(x=y_hat3, y=new_data$TransformedIncomeRatio, main="TransformedIncomeRatio vs Fitted (Forwards Model)", ylab="TransformedIncomeRatio", xlab="Fitted")
+```
+###### Conditional Mean Predictors
+(same as before)
+```{r}
+# for continuous predictors
+pairs(new_data[,4:6])
+```
+##### Assumptions for LR
+
+###### Residuals vs Fitted Plot
+
+```{r}
+plot(x =y_hat3, y = e_hat3, main="Residual vs Fitted (Forwards Model)", xlab="Fitted",
+ylab="Residuals")
+```
+###### Residuals vs Predictor plots (numerical)
+```{r}
+plot(x=new_data$BMI, y=e_hat3, main="Residual vs Predictor (BMI, Forwards Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat3, main="Residual vs Predictor (Sleep, Forwards Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat3, main="Residual vs Predictor (Alcohol, Forwards Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+###### Residuals vs Predictor plots (categorical)
+```{r}
+boxplot(e_hat3 ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status, Forwards Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat3 ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking, Forwards Model)", xlab="Currently Smoke", ylab="Residuals")
+
+```
+###### QQ plot
+```{r}
+qqnorm(e_hat3)
+qqline(e_hat3)
+```
+
+
+## Backwards
+```{r}
+# AIC
+stepAIC(lm(TransformedIncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data), scope=list(lower=lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8])), direction = "backward", k=2)
+# Same model as model 2
+
+# BIC
+stepAIC(lm(TransformedIncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data), scope=list(lower=lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8])), direction = "backward", k=log(n))
+# same model as model 3
+```
+
+
+### Stepwise
+```{r}
+# AIC
+stepAIC(lm(TransformedIncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data), scope=list(lower=lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8])), direction = "both", k=2)
+# same model as model 2
+
+# BIC
+stepAIC(lm(TransformedIncomeRatio ~ MaritalStatus + BMI + SleepHrsNight + AlcoholDay + SmokeNow, data=new_data), scope=list(lower=lm(TransformedIncomeRatio ~ 1, data=new_data[,3:8])), direction = "both", k=log(n))
+# same model as model 3
+```
+
+# Find Best Model Through All Possible Subsets
+
+```{r}
+best2 <- regsubsets(TransformedIncomeRatio ~ MaritalStatus + SleepHrsNight + 
+    AlcoholDay + SmokeNow + BMI, data=new_data, nbest=1, nvmax=5)
+summary(best2)
+subsets(best2, statistic="adjr2", legend=FALSE)
+```
+
+## New Models
+
+```{r}
+model4 <- lm(TransformedIncomeRatio ~ MaritalStatus, data=new_data)
+y_hat4 <- fitted(model4)
+e_hat4 <- resid(model4)
+
+model5 <- lm(TransformedIncomeRatio ~ MaritalStatus + SmokeNow, data=new_data )
+y_hat5 <- fitted(model5)
+e_hat5 <- resid(model5)
+
+model6 <- lm(TransformedIncomeRatio ~ MaritalStatus + SmokeNow + AlcoholDay, data=new_data )
+y_hat6 <- fitted(model6)
+e_hat6 <- resid(model6)
+
+# the best model with 4 predictors is model3
+```
+
+### Assessment of Assumptions on Models from All Possible Subsets
+
+#### Conditions for MLR
+
+##### Conditional Mean Response
+
+```{r, Conditional Mean Response}
+plot(x=y_hat4, y=new_data$TransformedIncomeRatio, main="TransformedIncomeRatio vs Fitted (1 Pred. Model)", ylab="TransformedIncomeRatio", xlab="Fitted")
+
+plot(x=y_hat5, y=new_data$TransformedIncomeRatio, main="TransformedIncomeRatio vs Fitted (2 Pred. Model)", ylab="TransformedIncomeRatio", xlab="Fitted")
+
+plot(x=y_hat6, y=new_data$TransformedIncomeRatio, main="TransformedIncomeRatio vs Fitted (3 Pred. Model)", ylab="TransformedIncomeRatio", xlab="Fitted")
+```
+##### Conditional Mean Predictors
+(all comparisons can be seen in the pairwise comparison done earlier)
+```{r}
+# for continuous predictors
+pairs(new_data[,4:6])
+```
+#### Assumptions for LR
+
+##### Residuals vs Fitted Plot
+
+```{r}
+plot(x =y_hat4, y = e_hat4, main="Residual vs Fitted (1 Pred. Model)", xlab="Fitted",
+ylab="Residuals")
+
+plot(x =y_hat5, y = e_hat5, main="Residual vs Fitted (2 Pred. Model)", xlab="Fitted",
+ylab="Residuals")
+
+plot(x =y_hat6, y = e_hat6, main="Residual vs Fitted (3 Pred. Model)", xlab="Fitted",
+ylab="Residuals")
+```
+##### Residuals vs Predictor plots (numerical)
+
+###### 1 Pred. Model
+```{r}
+plot(x=new_data$BMI, y=e_hat4, main="Residual vs Predictor (BMI, 1 Pred. Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat4, main="Residual vs Predictor (Sleep, 1 Pred. Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat4, main="Residual vs Predictor (Alcohol, 1 Pred. Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+
+###### 2 Pred. Model
+```{r}
+plot(x=new_data$BMI, y=e_hat5, main="Residual vs Predictor (BMI, 2 Pred. Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat5, main="Residual vs Predictor (Sleep, 2 Pred. Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat5, main="Residual vs Predictor (Alcohol, 2 Pred. Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+
+###### 3 Pred. Model
+```{r}
+plot(x=new_data$BMI, y=e_hat6, main="Residual vs Predictor (BMI, 3 Pred. Model)", xlab="BMI", ylab="Residuals")
+plot(x=new_data$SleepHrsNight, y=e_hat6, main="Residual vs Predictor (Sleep, 3 Pred. Model)", xlab="Hours of Sleep per Night", ylab="Residuals")
+plot(x=new_data$AlcoholDay, y=e_hat6, main="Residual vs Predictor (Alcohol, 3 Pred. Model)", xlab="Alcohol on Average", ylab="Residuals")
+```
+
+##### Residuals vs Predictor plots (categorical)
+
+##### 1 Pred. Model
+```{r}
+boxplot(e_hat4 ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status, 1 Pred. Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat4 ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking, 1 Pred. Model)", xlab="Currently Smoke", ylab="Residuals")
+```
+##### 2 Pred. Model
+```{r}
+boxplot(e_hat5 ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status, 2 Pred. Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat5 ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking, 2 Pred. Model)", xlab="Currently Smoke", ylab="Residuals")
+```
+
+
+##### 3 Pred. Model
+```{r}
+boxplot(e_hat6 ~ as.factor(new_data$MaritalStatus), main="Residual vs Predictor (Marital Status, 3 Pred. Model)", xlab="Marital Status", ylab="Residuals")
+boxplot(e_hat6 ~ as.factor(new_data$SmokeNow), main="Residual vs Predictor (Smoking, 3 Pred. Model)", xlab="Currently Smoke", ylab="Residuals")
+```
+##### QQ plot
+```{r}
+# for 1 pred. model
+qqnorm(e_hat4)
+qqline(e_hat4)
+
+# for 2 pred. model
+qqnorm(e_hat5)
+qqline(e_hat5)
+
+# for 3 pred. model
+qqnorm(e_hat6)
+qqline(e_hat6)
+```
+
+# Finding Problematic Observations for All Models
+
+(except the prelim model bc it violates the normality assumption)
+
+## Leverage Points
+
+### Transformed Model
+```{r}
+p2 <- length(coef(model2)) -1
+hii2 <- hatvalues(model2)
+cutoff_hii2 <- 2 * ((p2 + 1)/n)
+leverage_count2 <- sum(hii2 > cutoff_hii2)
+leverage_count2
+```
+
+### Forward Model
+```{r}
+p3 <- length(coef(model3)) -1
+hii3 <- hatvalues(model3)
+cutoff_hii3 <- 2 * ((p3 + 1)/n)
+leverage_count3 <- sum(hii3 > cutoff_hii3)
+leverage_count3
+```
+
+### 1 Pred. Model
+```{r}
+p4 <- length(coef(model4)) -1
+hii4 <- hatvalues(model4)
+cutoff_hii4 <- 2 * ((p4 + 1)/n)
+leverage_count4 <- sum(hii4 > cutoff_hii4)
+leverage_count4
+```
+
+
+### 2 Pred. Model
+```{r}
+p5 <- length(coef(model5)) -1
+hii5 <- hatvalues(model5)
+cutoff_hii5 <- 2 * ((p5 + 1)/n)
+leverage_count5 <- sum(hii5 > cutoff_hii5)
+leverage_count5
+```
+
+### 3 Pred. Model
+```{r}
+p6 <- length(coef(model6)) -1
+hii6 <- hatvalues(model6)
+cutoff_hii6 <- 2 * ((p6 + 1)/n)
+leverage_count6 <- sum(hii6 > cutoff_hii6)
+leverage_count6
+```
+
+
+## Outlier Points
+
+### Transformed Model
+```{r}
+ri2 <-rstandard(model2)
+outlier_count2 <- sum(ri2 > 4 | ri2 < -4)
+outlier_count2
+```
+
+### Forward Model
+```{r}
+ri3 <-rstandard(model3)
+outlier_count3 <- sum(ri3 > 4 | ri3 < -4)
+outlier_count3
+```
+
+
+### 1 Pred. Model
+```{r}
+ri4 <-rstandard(model4)
+outlier_count4 <- sum(ri4 > 4 | ri4 < -4)
+outlier_count4
+```
+
+
+### 2 Pred. Model
+```{r}
+ri5 <-rstandard(model5)
+outlier_count5 <- sum(ri5 > 4 | ri5 < -4)
+outlier_count5
+```
+
+
+### 3 Pred. Model
+```{r}
+ri6 <-rstandard(model6)
+outlier_count6 <- sum(ri6 > 4 | ri6 < -4)
+outlier_count6
+```
+
+
+## Influential Points
+
+### Influential on All Fitted Values
+
+#### Transformed Model
+```{r}
+di2 <- cooks.distance(model2)
+cutoff_di2 <- qf(0.5, p2 + 1, n - p2 - 1)
+inf_all_fitted2 <- sum(di2 > cutoff_di2)
+inf_all_fitted2
+```
+
+
+#### Forward Model
+```{r}
+di3 <- cooks.distance(model3)
+cutoff_di3 <- qf(0.5, p3 + 1, n - p3 - 1)
+inf_all_fitted3 <- sum(di3 > cutoff_di3)
+inf_all_fitted3
+```
+
+
+#### 1 Pred. Model
+```{r}
+di4 <- cooks.distance(model4)
+cutoff_di4 <- qf(0.5, p4 + 1, n - p4 - 1)
+inf_all_fitted4 <- sum(di4 > cutoff_di4)
+inf_all_fitted4
+```
+
+#### 2 Pred. Model
+```{r}
+di5 <- cooks.distance(model5)
+cutoff_di5 <- qf(0.5, p5 + 1, n - p5 - 1)
+inf_all_fitted5 <- sum(di5 > cutoff_di5)
+inf_all_fitted5
+```
+
+#### 3 Pred. Model
+```{r}
+di6 <- cooks.distance(model6)
+cutoff_di6 <- qf(0.5, p6 + 1, n - p5 - 1)
+inf_all_fitted6 <- sum(di6 > cutoff_di6)
+inf_all_fitted6
+```
+
+
+### Influential on Own Fitted Values
+#### Transformed Model
+```{r}
+dffits2 <- dffits(model2)
+cutoff_dffits2 <- 2 * sqrt((p2 + 1)/ n)
+inf_own_fit2 <- sum(abs(dffits2) > cutoff_dffits2)
+inf_own_fit2
+```
+
+
+#### Forward Model
+```{r}
+dffits3 <- dffits(model3)
+cutoff_dffits3 <- 2 * sqrt((p3 + 1)/ n)
+inf_own_fit3 <- sum(abs(dffits3) > cutoff_dffits3)
+inf_own_fit3
+```
+
+#### 1 Pred. Model
+```{r}
+dffits4 <- dffits(model4)
+cutoff_dffits4 <- 2 * sqrt((p4 + 1)/ n)
+inf_own_fit4 <- sum(abs(dffits4) > cutoff_dffits4)
+inf_own_fit4
+```
+
+#### 2 Pred. Model
+```{r}
+dffits5 <- dffits(model5)
+cutoff_dffits5 <- 2 * sqrt((p5 + 1)/ n)
+inf_own_fit5 <- sum(abs(dffits5) > cutoff_dffits5)
+inf_own_fit5
+```
+
+#### 3 Pred. Model
+```{r}
+dffits6 <- dffits(model5)
+cutoff_dffits6 <- 2 * sqrt((p6 + 1)/ n)
+inf_own_fit6 <- sum(abs(dffits6) > cutoff_dffits6)
+inf_own_fit6
+```
+
+
+### Influential on Coefficients
+#### Transformed Model
+```{r}
+beta_cut <- 2/sqrt(n)
+
+for(i in 1:p2){
+print(sum(abs(dfbetas(model2)[,i]) > beta_cut))
+}
+```
+
+#### Forward Model
+```{r}
+beta_cut <- 2/sqrt(n)
+
+for(i in 1:p3){
+print(sum(abs(dfbetas(model3)[,i]) > beta_cut))
+}
+```
+
+#### 1 Pred. Model
+```{r}
+beta_cut <- 2/sqrt(n)
+
+for(i in 1:p4){
+print(sum(abs(dfbetas(model4)[,i]) > beta_cut))
+}
+```
+
+#### 2 Pred. Model
+```{r}
+beta_cut <- 2/sqrt(n)
+
+for(i in 1:p5){
+print(sum(abs(dfbetas(model5)[,i]) > beta_cut))
+}
+```
+
+#### 3 Pred. Model
+```{r}
+beta_cut <- 2/sqrt(n)
+
+for(i in 1:p6){
+print(sum(abs(dfbetas(model6)[,i]) > beta_cut))
+}
+```
+# Finding Multicollinearity in all Models
+
+## For all the Variables
+```{r}
+test_model <- lm(TransformedIncomeRatio ~ BMI + SleepHrsNight + AlcoholDay, data=new_data)
+vif(test_model)
+```
+
+
+## Transformed Model
+```{r}
+vif(model2)
+```
+
+## Forward Model
+```{r}
+vif(model3)
+```
+
+## 1 Pred. Model
+Note possible because the model only has 1 predictor
+
+## 2 Pred. Model
+```{r}
+vif(model5)
+```
+
+## 3 Pred. Model
+```{r}
+vif(model6)
+```
+
+
+# Measures of Correctness for All Models
+
+## R^2, AIC, AICc, BIC
+### Transformed Model
+```{r}
+cbind(summary(model2)$adj.r.squared, 
+      extractAIC(model2, k=2)[2], 
+      extractAIC(model2, k=log(n))[2], 
+      extractAIC(model2, k=2)[2] + (2 * (p2+2)*(p2+3)/(n-p2-1)))
+```
+
+
+### Forward Model
+```{r}
+cbind(summary(model3)$adj.r.squared, 
+      extractAIC(model3, k=2)[2], 
+      extractAIC(model3, k=log(n))[2], 
+      extractAIC(model3, k=2)[2] + (2 * (p3+2)*(p3+3)/(n-p3-1)))
+```
+
+### 1 Pred. Model
+```{r}
+cbind(summary(model4)$adj.r.squared, 
+      extractAIC(model4, k=2)[2], 
+      extractAIC(model4, k=log(n))[2], 
+      extractAIC(model4, k=2)[2] + (2 * (p4+2)*(p4+3)/(n-p4-1)))
+```
+
+### 2 Pred. Model
+```{r}
+cbind(summary(model5)$adj.r.squared, 
+      extractAIC(model5, k=2)[2], 
+      extractAIC(model5, k=log(n))[2], 
+      extractAIC(model5, k=2)[2] + (2 * (p5+2)*(p5+3)/(n-p5-1)))
+```
+
+### 3 Pred. Model
+```{r}
+cbind(summary(model6)$adj.r.squared, 
+      extractAIC(model6, k=2)[2], 
+      extractAIC(model6, k=log(n))[2], 
+      extractAIC(model6, k=2)[2] + (2 * (p6+2)*(p6+3)/(n-p6-1)))
+```
+
+# Chosen Model
+```{r}
+summary(model2)
+```
+
