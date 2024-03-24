@@ -1,4 +1,4 @@
-# Socioeconomic-Analysis Project
+# Socioeconomic Analysis Project
 
 This is a repo for Carter Ponce, Dian Rong, Jing Yu and Krishna Kumar's STA302 Final Project, focused on analyzing the relationship between lifestyle elements and an individual's family income-to-poverty ratio in the United States during 2017-2018.
 
